@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Normalisasi Nama Produk</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <h1>Normalisasi Nama Produk</h1>
+      <p>Tempel daftar nama produk dari berbagai supplier, satu nama per baris.</p>
+    </header>
+
+    <section class="input-panel">
+      <label for="product-names">Daftar nama produk</label>
+      <textarea id="product-names" rows="10" placeholder="Indomie Goreng 85gr&#10;Mie Goreng Indomi 85g&#10;INDOMIE GRNG 85 GR"></textarea>
+      <button id="submit-btn" type="button">Cocokkan Produk</button>
+    </section>
+
+    <section class="results-panel">
+      <div id="empty-state" class="state">
+        <p>Belum ada hasil. Masukkan daftar nama produk lalu klik "Cocokkan Produk".</p>
+      </div>
+
+      <div id="loading-state" class="state hidden">
+        <p>Memproses...</p>
+      </div>
+
+      <div id="error-state" class="state hidden">
+        <p id="error-message"></p>
+      </div>
+
+      <div id="clusters-list" class="state hidden"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

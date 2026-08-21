@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+model_weights/
+.DS_Store

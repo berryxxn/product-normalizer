@@ -1,51 +1,83 @@
-from difflib import SequenceMatcher
+import numpy as np
+from typing import List, Tuple
+from sentence_transformers import SentenceTransformer
+import hdbscan
+from sklearn.metrics.pairwise import cosine_similarity
 
 from app.preprocess import clean_text
 from app.schemas import Cluster
 
-SIMILARITY_THRESHOLD = 0.6
+MODEL_NAME = "LazarusNLP/simcse-indobert-base"
+_SIMILARITY_THRESHOLD = 0.65
+
+_model: SentenceTransformer | None = None
 
 
-def similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, clean_text(a), clean_text(b)).ratio()
+def get_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(MODEL_NAME)
+    return _model
 
 
-def _pick_canonical(members: list[str]) -> tuple[str, float]:
+def encode_names(names: List[str]) -> np.ndarray:
+    model = get_model()
+    cleaned = [clean_text(name) for name in names]
+    embeddings = model.encode(cleaned, normalize_embeddings=True, show_progress_bar=False)
+    return embeddings
+
+
+def _pick_canonical(members: List[str], embeddings: np.ndarray, indices: List[int]) -> Tuple[str, float]:
     if len(members) == 1:
         return members[0], 1.0
 
-    best_name = members[0]
-    best_avg = -1.0
-    for candidate in members:
-        scores = [similarity(candidate, other) for other in members if other != candidate]
-        avg = sum(scores) / len(scores)
-        if avg > best_avg:
-            best_avg = avg
-            best_name = candidate
-    return best_name, best_avg
+    cluster_embeddings = embeddings[indices]
+    similarities = cosine_similarity(cluster_embeddings)
+    np.fill_diagonal(similarities, 0)
+    avg_similarities = similarities.mean(axis=1)
+    best_idx = int(np.argmax(avg_similarities))
+    return members[best_idx], float(avg_similarities[best_idx])
 
 
-def cluster_names(names: list[str]) -> list[Cluster]:
-    groups: list[list[str]] = []
+def cluster_names(names: List[str]) -> List[Cluster]:
+    if not names:
+        return []
 
-    for name in names:
-        best_group_idx = None
-        best_score = 0.0
-        for idx, group in enumerate(groups):
-            score = max(similarity(name, member) for member in group)
-            if score > best_score:
-                best_score = score
-                best_group_idx = idx
+    embeddings = encode_names(names)
 
-        if best_group_idx is not None and best_score >= SIMILARITY_THRESHOLD:
-            groups[best_group_idx].append(name)
-        else:
-            groups.append([name])
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=2,
+        min_samples=1,
+        metric="euclidean",
+        cluster_selection_method="eom",
+    )
+    labels = clusterer.fit_predict(embeddings)
 
+    unique_labels = set(labels)
     clusters = []
-    for group in groups:
-        canonical, avg_similarity = _pick_canonical(group)
+
+    for label in sorted(unique_labels):
+        if label == -1:
+            continue
+        indices = [i for i, l in enumerate(labels) if l == label]
+        members = [names[i] for i in indices]
+        canonical, avg_sim = _pick_canonical(members, embeddings, indices)
         clusters.append(
-            Cluster(canonical_name=canonical, members=group, similarity=round(avg_similarity, 3))
+            Cluster(
+                canonical_name=canonical,
+                members=members,
+                similarity=round(avg_sim, 3)
+            )
         )
+
+    noise_indices = [i for i, l in enumerate(labels) if l == -1]
+    for idx in noise_indices:
+        clusters.append(
+            Cluster(
+                canonical_name=names[idx],
+                members=[names[idx]],
+                similarity=1.0
+            )
+        )
+
     return clusters

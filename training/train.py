@@ -3,9 +3,8 @@ generate_dataset.py. Offline script, not part of the running app -- run it,
 then the checkpoint at model_weights/ is picked up automatically by
 backend/app/model.py on the next container start.
 
-Known limitation: see the "Fine-tuning" section in the top-level README.md
-before trusting a checkpoint from this script -- the current dataset design
-regresses flavor discrimination.
+After training, run evaluate.py against the checkpoint before trusting it --
+see the "Fine-tuning" section in the top-level README.md for why.
 """
 import json
 from pathlib import Path
@@ -19,20 +18,34 @@ OUTPUT_PATH = Path(__file__).parent.parent / "model_weights"
 
 BATCH_SIZE = 16
 EPOCHS = 3
+LEARNING_RATE = 1e-5
+TRIPLET_MARGIN = 0.3
+# TripletLoss-only + expanded/diverse catalog + gentle LR fixed generalization
+# (held-out canary passes) but flavor separation still under-fit -- root cause
+# turned out to be generate_dataset.py picking hard-negative siblings at
+# random, which almost always confounded a flavor difference with a size
+# difference at the same time (only ~16% of triplets isolated flavor alone).
+# Fixed there (prefer same-size siblings); margin=0.4 was tried as a
+# workaround before finding that root cause and didn't help, so back to 0.3.
+USE_MNRL = False
 
 
 def load_examples() -> tuple[list[InputExample], list[InputExample]]:
+    # Every row feeds MNRL as a plain (anchor, positive) pair -- this is what
+    # teaches general "these are the same product" recognition. Rows that also
+    # have a hard negative additionally feed TripletLoss. Earlier attempt made
+    # these mutually exclusive (100% of rows had a negative, so MNRL got zero
+    # training) which caused real generalization loss on untrained categories.
     positive_examples = []
     triplet_examples = []
     with open(DATA_PATH, encoding="utf-8") as f:
         for line in f:
             row = json.loads(line)
+            positive_examples.append(InputExample(texts=[row["anchor"], row["positive"]]))
             if row.get("negative"):
                 triplet_examples.append(
                     InputExample(texts=[row["anchor"], row["positive"], row["negative"]])
                 )
-            else:
-                positive_examples.append(InputExample(texts=[row["anchor"], row["positive"]]))
     return positive_examples, triplet_examples
 
 
@@ -43,7 +56,7 @@ def main() -> None:
     model = SentenceTransformer(BASE_MODEL, device="cpu")
 
     train_objectives = []
-    if positive_examples:
+    if USE_MNRL and positive_examples:
         loader = DataLoader(positive_examples, shuffle=True, batch_size=BATCH_SIZE)
         train_objectives.append((loader, losses.MultipleNegativesRankingLoss(model)))
     if triplet_examples:
@@ -55,7 +68,7 @@ def main() -> None:
         triplet_loss = losses.TripletLoss(
             model,
             distance_metric=losses.TripletDistanceMetric.COSINE,
-            triplet_margin=0.3,
+            triplet_margin=TRIPLET_MARGIN,
         )
         train_objectives.append((loader, triplet_loss))
 
@@ -67,6 +80,7 @@ def main() -> None:
         train_objectives=train_objectives,
         epochs=EPOCHS,
         warmup_steps=warmup_steps,
+        optimizer_params={"lr": LEARNING_RATE},
         show_progress_bar=True,
     )
 

@@ -1,0 +1,9 @@
+.git
+__pycache__
+*.pyc
+.venv
+venv
+model_weights
+training/data
+docs
+.personal-storage

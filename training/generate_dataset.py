@@ -2,7 +2,8 @@
 embedding model. Offline script, not part of the running app.
 
 Builds a seed catalog of real Indonesian retail products (instant noodles,
-staples, beverages, snacks), generates noisy supplier-style variants of each
+staples, beverages, snacks, toiletries), generates noisy supplier-style
+variants of each
 (abbreviations, typos, shuffled word order, unit-format changes, casing), and
 emits (anchor, positive[, hard_negative]) training pairs. Hard negatives are
 same-brand products that differ in flavor or size -- the exact confusion the
@@ -94,6 +95,17 @@ def build_catalog() -> list[Product]:
             for size in sizes:
                 products.append(Product(base, variant, size))
 
+    toiletry_items = [
+        ("Sabun Mandi", ["Lifebuoy", "Lux", "Nuvo", "Dettol"], ["Batangan", "Sabun Cair"]),
+        ("Sampo", ["Pantene", "Clear", "Sunsilk", "Dove"], ["170ml", "340ml"]),
+        ("Pasta Gigi", ["Pepsodent", "Ciptadent", "Formula"], ["75gr", "190gr"]),
+        ("Deterjen", ["Rinso", "Attack", "Daia", "Soklin"], ["Bubuk", "Cair"]),
+    ]
+    for base, brands, sizes in toiletry_items:
+        for brand in brands:
+            for size in sizes:
+                products.append(Product(f"{base} {brand}", "", size))
+
     seen = set()
     unique = []
     for p in products:
@@ -152,14 +164,32 @@ def augment_unit_format(text: str) -> str:
     def repl(m: re.Match) -> str:
         num, unit = m.group(1), m.group(2).lower()
         choice = random.random()
+        try:
+            value = float(num)
+        except ValueError:
+            value = None
+
+        # Genuine cross-unit conversion (85gr <-> 0.085kg), not just spacing/
+        # casing variants of the same unit -- without this, the model is
+        # never shown this relationship as a positive pair during training.
+        if value is not None and choice < 0.2:
+            if unit in ("gr", "g", "gram"):
+                return f"{value / 1000:g}kg"
+            if unit == "kg":
+                return f"{value * 1000:g}gr"
+            if unit == "ml":
+                return f"{value / 1000:g}L"
+            if unit == "l":
+                return f"{value * 1000:g}ml"
+
         if unit in ("gr", "g", "gram"):
-            return f"{num} gr" if choice < 0.34 else (f"{num}g" if choice < 0.67 else f"{num}gram")
+            return f"{num} gr" if choice < 0.6 else (f"{num}g" if choice < 0.8 else f"{num}gram")
         if unit == "ml":
-            return f"{num} ml" if choice < 0.5 else f"{num}ml"
+            return f"{num} ml" if choice < 0.6 else f"{num}ml"
         if unit == "l":
-            return f"{num}L" if choice < 0.5 else f"{num} liter"
+            return f"{num}L" if choice < 0.6 else f"{num} liter"
         if unit == "kg":
-            return f"{num} kg" if choice < 0.5 else f"{num}KG"
+            return f"{num} kg" if choice < 0.6 else f"{num}KG"
         return m.group(0)
 
     return _UNIT_PATTERN.sub(repl, text)
@@ -195,10 +225,18 @@ def build_pairs(products: list[Product]) -> list[dict]:
         variants = [v for v in variants if v.strip() and v != p.text] or [p.text]
 
         siblings = [s for s in by_brand[p.brand] if s.text != p.text]
+        # Prefer a same-size sibling: that isolates a flavor/variant-only
+        # difference, which is what the embedding model actually needs to
+        # learn (size mismatches are already caught deterministically by the
+        # matcher's quantity guard, regardless of embedding quality). Picking
+        # siblings fully at random almost always confounds flavor with size
+        # at once, diluting the one signal that matters.
+        same_size_siblings = [s for s in siblings if s.size == p.size]
+        preferred_siblings = same_size_siblings or siblings
 
         for v in variants:
             if siblings:
-                negative = random.choice(siblings).text
+                negative = random.choice(preferred_siblings).text
                 pairs.append({"anchor": p.text, "positive": v, "negative": negative})
             else:
                 pairs.append({"anchor": p.text, "positive": v, "negative": None})

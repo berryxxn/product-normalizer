@@ -31,6 +31,19 @@ uvicorn app.main:app --reload
 Then open http://localhost:8000. The first request downloads the embedding model from
 Hugging Face (not baked in outside Docker), so it'll be slow once.
 
+## Fine-tuning
+
+`training/generate_dataset.py` + `training/train.py` build a synthetic dataset and fine-tune
+the embedding model with `MultipleNegativesRankingLoss`, saving to `model_weights/`. These are
+offline scripts, not part of the running app -- `model.py` falls back to the pretrained model
+automatically when `model_weights/` has no checkpoint (its current, verified-working state).
+
+**Not currently usable as-is.** The current synthetic dataset improves abbreviation/typo
+recognition but regresses same-brand-different-flavor separation badly enough to break real
+clustering cases the pretrained model gets right (tested at both 1 and 3 epochs). Before trusting
+a checkpoint from this script, verify it doesn't regress on hard negatives like "Indomie Goreng"
+vs "Indomie Ayam Bawang" -- don't assume fine-tuned beats pretrained without checking.
+
 ## API
 
 - `GET /health` — health check

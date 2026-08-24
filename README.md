@@ -38,11 +38,26 @@ the embedding model with `MultipleNegativesRankingLoss`, saving to `model_weight
 offline scripts, not part of the running app -- `model.py` falls back to the pretrained model
 automatically when `model_weights/` has no checkpoint (its current, verified-working state).
 
-**Not currently usable as-is.** The current synthetic dataset improves abbreviation/typo
-recognition but regresses same-brand-different-flavor separation badly enough to break real
-clustering cases the pretrained model gets right (tested at both 1 and 3 epochs). Before trusting
-a checkpoint from this script, verify it doesn't regress on hard negatives like "Indomie Goreng"
-vs "Indomie Ayam Bawang" -- don't assume fine-tuned beats pretrained without checking.
+**Not currently usable as-is.** Two training approaches were tried, both rejected after empirical
+testing:
+
+1. `MultipleNegativesRankingLoss` on positive pairs + hard-negative triplets (50% of variants got
+   a hard negative). Improved abbreviation recognition but regressed same-brand-different-flavor
+   separation badly enough to break real clustering cases the pretrained model gets right (tested
+   at both 1 and 3 epochs -- not simply overfitting).
+2. `TripletLoss` (explicit margin) with every variant getting a hard negative. This fixed the
+   clustering-level regression from attempt 1 (passes the full test suite, including the flavor
+   and pack-size hard negatives) -- but only because the hybrid matcher's lexical weighting
+   happens to compensate. Tested against product categories entirely outside the synthetic
+   training vocabulary (e.g. soap, detergent), the raw embedding is measurably *worse* than
+   pretrained at recognizing same-product paraphrases and at separating different product types --
+   classic catastrophic forgetting from fine-tuning on a narrow, repetitive 163-product vocabulary
+   with no general-domain regularization. Passing the existing test suite isn't enough evidence a
+   checkpoint is safe to ship; check out-of-distribution categories too.
+
+A real fix would need a substantially larger and more linguistically diverse seed catalog (not
+just more augmentation of the same ~163 products), and ideally a held-out validation set with
+early stopping to catch this kind of regression automatically instead of by hand.
 
 ## API
 

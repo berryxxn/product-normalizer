@@ -197,7 +197,7 @@ def build_pairs(products: list[Product]) -> list[dict]:
         siblings = [s for s in by_brand[p.brand] if s.text != p.text]
 
         for v in variants:
-            if siblings and random.random() < 0.5:
+            if siblings:
                 negative = random.choice(siblings).text
                 pairs.append({"anchor": p.text, "positive": v, "negative": negative})
             else:

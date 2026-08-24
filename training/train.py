@@ -47,8 +47,17 @@ def main() -> None:
         loader = DataLoader(positive_examples, shuffle=True, batch_size=BATCH_SIZE)
         train_objectives.append((loader, losses.MultipleNegativesRankingLoss(model)))
     if triplet_examples:
+        # TripletLoss enforces an absolute margin between anchor-positive and
+        # anchor-negative distance, directly targeting the failure MNRL missed:
+        # same-brand-different-flavor pairs need to be pushed apart, not just
+        # ranked below the positive within a batch.
         loader = DataLoader(triplet_examples, shuffle=True, batch_size=BATCH_SIZE)
-        train_objectives.append((loader, losses.MultipleNegativesRankingLoss(model)))
+        triplet_loss = losses.TripletLoss(
+            model,
+            distance_metric=losses.TripletDistanceMetric.COSINE,
+            triplet_margin=0.3,
+        )
+        train_objectives.append((loader, triplet_loss))
 
     total_examples = len(positive_examples) + len(triplet_examples)
     steps_per_epoch = max(1, total_examples // BATCH_SIZE)

@@ -3,3 +3,8 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+    volumes:
+      - ./model_weights:/app/model_weights
+    environment:
+      - MODEL_PATH=/app/model_weights
+      - HF_HUB_OFFLINE=1

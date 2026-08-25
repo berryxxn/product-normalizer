@@ -6,7 +6,7 @@ produk yang sama beserta nama kanonis yang disarankan.
 Matching is hybrid: semantic similarity from a fine-tuned multilingual sentence-embedding model
 (base: `paraphrase-multilingual-MiniLM-L12-v2`; falls back to the pretrained base model if
 `model_weights/` has no checkpoint) combined with lexical similarity (`rapidfuzz`), clustered
-with `AgglomerativeClustering`. See `CLAUDE.md` for the full design rationale.
+with `AgglomerativeClustering`.
 
 ## Run locally with Docker
 

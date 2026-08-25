@@ -1,31 +1,7 @@
-"""Evaluate a fine-tuned checkpoint before trusting it. Offline script, not
-part of the running app.
-
-Checks five things, comparing the candidate checkpoint against the pretrained
-baseline:
-  1. Raw semantic similarity on known hard cases (diagnostic, not pass/fail
-     on its own -- the hybrid matcher's lexical weighting can compensate for
-     weak embedding scores, see README.md's Fine-tuning section).
-  2. The full hybrid matcher's clustering output on those same cases -- this
-     IS pass/fail, since it's what the deployed app actually does.
-  3. The same clustering check on a held-out category (diapers/baby care)
-     that never appears in generate_dataset.py's training catalog -- this is
-     the canary for catastrophic forgetting on categories the model wasn't
-     trained on.
-  4. Verdict: only PASS if both clustering checks (2 and 3) are fully correct.
-  5. A per-category evidence table against data/eval_set.jsonl (disjoint
-     product families, tagged A/B/D/F/G/H) -- lexical (rapidfuzz) vs.
-     pretrained-semantic vs. fine-tuned-semantic, averaged per category.
-     Diagnostic, not part of the ship/no-ship verdict: this is the evidence
-     that feeds the "AI is needed, not forced" argument in
-     .personal-storage/PADAN_dataset_finetuning_spec.md, not a pass/fail gate.
-
-Usage: python training/evaluate.py [path-to-checkpoint]
-Defaults to model_weights/ if no path given.
-"""
 import json
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 EVAL_SET_PATH = Path(__file__).parent / "data" / "eval_set.jsonl"
+REPORT_PATH = Path(__file__).parent.parent / "model_weights" / "eval_report.json"
 
 PRETRAINED = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_CHECKPOINT = Path(__file__).parent.parent / "model_weights"
@@ -60,24 +37,15 @@ IN_DISTRIBUTION_CLUSTERS = [
     ["Kopi Kapal Api Sachet", "Kopi Kapal Api Renceng"],
 ]
 
-# held-out category: never appears in generate_dataset.py's catalog. Tests
-# only the exact relationships already verified as the working bar elsewhere
-# (paraphrase-positive, flavor-negative, size-negative) within one unseen
-# brand -- deliberately excludes cross-brand comparison, since that's a
-# separate, pre-existing gap in the baseline itself (confirmed: even the
-# pretrained model merges same-flavor-same-size-different-brand pairs) and
-# would confound whether a failure here is caused by fine-tuning or not.
 HELD_OUT_CLUSTERS = [
     ["Sarden ABC Saus Tomat 155gr", "Ikan Sarden ABC Saus Tomat 155gr"],
     ["Sarden ABC Extra Pedas 155gr"],
     ["Sarden ABC Saus Tomat 425gr"],
 ]
 
-
 def cosine(m: SentenceTransformer, a: str, b: str) -> float:
     emb = m.encode([a, b], normalize_embeddings=True)
     return float(np.dot(emb[0], emb[1]))
-
 
 def check_semantic_pairs(pretrained: SentenceTransformer, candidate: SentenceTransformer) -> None:
     print("--- raw semantic similarity (diagnostic) ---")
@@ -88,8 +56,7 @@ def check_semantic_pairs(pretrained: SentenceTransformer, candidate: SentenceTra
         print(f"{p_sim:10.3f} {c_sim:10.3f}  want {direction:4s} -- {desc}")
     print()
 
-
-def check_clusters(expected_clusters: list[list[str]], label: str) -> bool:
+def check_clusters(expected_clusters: list[list[str]], label: str) -> dict:
     from app.matcher import cluster_names
 
     names = [n for group in expected_clusters for n in group]
@@ -116,13 +83,21 @@ def check_clusters(expected_clusters: list[list[str]], label: str) -> bool:
     for cluster in result:
         print(f"  {cluster.canonical_name!r} sim={cluster.similarity}  members={cluster.members}")
     print()
-    return ok
+    return {
+        "label": label,
+        "status": status,
+        "got_group_count": got_group_count,
+        "want_group_count": want_group_count,
+        "clusters": [
+            {"canonical_name": c.canonical_name, "similarity": c.similarity, "members": c.members}
+            for c in result
+        ],
+    }
 
-
-def report_eval_set(pretrained: SentenceTransformer, candidate: SentenceTransformer) -> None:
+def report_eval_set(pretrained: SentenceTransformer, candidate: SentenceTransformer) -> list[dict]:
     if not EVAL_SET_PATH.exists():
         print(f"--- eval set not found at {EVAL_SET_PATH}, skipping category table ---\n")
-        return
+        return []
 
     with open(EVAL_SET_PATH, encoding="utf-8") as f:
         rows = [json.loads(line) for line in f]
@@ -134,6 +109,7 @@ def report_eval_set(pretrained: SentenceTransformer, candidate: SentenceTransfor
     print(f"--- per-category evidence table (eval_set.jsonl, {len(rows)} pairs, held out from training) ---")
     header = f"{'category':<20} {'label':<9} {'n':>3}  {'lexical':>8} {'pretrained':>11} {'fine-tuned':>11}"
     print(header)
+    table = []
     for category in sorted(by_category):
         pairs = by_category[category]
         label = pairs[0]["label"]
@@ -143,13 +119,24 @@ def report_eval_set(pretrained: SentenceTransformer, candidate: SentenceTransfor
             lexical_scores.append(fuzz.token_set_ratio(a, b) / 100.0)
             pretrained_scores.append(cosine(pretrained, a, b))
             candidate_scores.append(cosine(candidate, a, b))
+        lexical_avg = float(np.mean(lexical_scores))
+        pretrained_avg = float(np.mean(pretrained_scores))
+        candidate_avg = float(np.mean(candidate_scores))
         print(
             f"{category:<20} {label:<9} {len(pairs):>3}  "
-            f"{np.mean(lexical_scores):>8.3f} {np.mean(pretrained_scores):>11.3f} "
-            f"{np.mean(candidate_scores):>11.3f}"
+            f"{lexical_avg:>8.3f} {pretrained_avg:>11.3f} "
+            f"{candidate_avg:>11.3f}"
         )
+        table.append({
+            "category": category,
+            "label": label,
+            "n": len(pairs),
+            "lexical_avg": round(lexical_avg, 3),
+            "pretrained_semantic_avg": round(pretrained_avg, 3),
+            "fine_tuned_semantic_avg": round(candidate_avg, 3),
+        })
     print("(label=positive wants HIGH scores, label=negative wants LOW scores)\n")
-
+    return table
 
 def main() -> None:
     checkpoint = sys.argv[1] if len(sys.argv) > 1 else str(DEFAULT_CHECKPOINT)
@@ -158,20 +145,36 @@ def main() -> None:
     candidate = SentenceTransformer(checkpoint, device="cpu")
 
     check_semantic_pairs(pretrained, candidate)
-    report_eval_set(pretrained, candidate)
+    eval_set_table = report_eval_set(pretrained, candidate)
 
     import os
     os.environ["MODEL_PATH"] = checkpoint
     import app.model as model_module
     model_module.MODEL_PATH = checkpoint
-    model_module._model = None  # force reload with the candidate checkpoint
+    model_module._model = None 
 
-    in_dist_ok = check_clusters(IN_DISTRIBUTION_CLUSTERS, "in-distribution (trained categories)")
-    held_out_ok = check_clusters(HELD_OUT_CLUSTERS, "held-out canary (sardines, never trained on)")
+    in_dist_report = check_clusters(IN_DISTRIBUTION_CLUSTERS, "in-distribution (trained categories)")
+    held_out_report = check_clusters(HELD_OUT_CLUSTERS, "held-out canary (sardines, never trained on)")
 
-    verdict = "PASS -- safe to ship" if (in_dist_ok and held_out_ok) else "FAIL -- do not ship"
+    passed = in_dist_report["status"] == "PASS" and held_out_report["status"] == "PASS"
+    verdict = "PASS -- safe to ship" if passed else "FAIL -- do not ship"
     print(f"=== VERDICT: {verdict} ===")
 
+    report = {
+        "ran_at": datetime.now(timezone.utc).isoformat(),
+        "checkpoint": checkpoint,
+        "verdict": "PASS" if passed else "FAIL",
+        "in_distribution_check": in_dist_report,
+        "held_out_canary_check": held_out_report,
+        "per_category_evidence_table": eval_set_table,
+    }
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(REPORT_PATH, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    print(f"wrote eval report to {REPORT_PATH}")
+
+    if not passed:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

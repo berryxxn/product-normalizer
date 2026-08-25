@@ -200,8 +200,8 @@ body {
   }
 }
 
-.state.hidden {
-  display: none;
+.hidden {
+  display: none !important;
 }
 
 .error-state {

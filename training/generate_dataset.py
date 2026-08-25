@@ -1,26 +1,3 @@
-"""Generate synthetic training pairs for fine-tuning the product-name
-embedding model. Offline script, not part of the running app.
-
-Builds a seed catalog of real Indonesian retail products (instant noodles,
-staples, beverages, snacks, toiletries), generates noisy supplier-style
-variants of each (abbreviations, typos, shuffled word order, unit-format
-changes, casing) as category-A ("lexical-trivial") positives, and emits
-(anchor, positive[, hard_negative]) training triples tagged with a
-`category` field:
-
-  A_lexical          -- lexical/formatting noise, same product
-  B_sinonim          -- hand-written synonym/translation pairs, same product
-  D_brand_deskriptif -- hand-written brand-name vs. generic-description pairs
-  F_size_trap        -- hard negative: same brand+flavor, different size
-  G_rasa_trap        -- hard negative: same brand+size, different flavor
-  H_brand_neighbor   -- hard negative: same generic product type/size,
-                         different competing brand
-
-See `.personal-storage/PADAN_dataset_finetuning_spec.md` for why B/D/H were
-added on top of the original A/F/G-only dataset: those are the categories
-that actually distinguish "needs semantic understanding" from "fuzzy string
-matching would already handle this."
-"""
 import json
 import random
 import re
@@ -32,10 +9,6 @@ random.seed(42)
 
 DATA_DIR = Path(__file__).parent / "data"
 
-# Shared with build_brand_neighbor_negatives() below -- these are the
-# families where the catalog already models several real competing brands
-# for the same generic product, which is exactly what a category-H
-# (brand-neighbor) hard negative needs.
 NOODLE_BRANDS = ["Indomie", "Mie Sedaap", "Sarimi", "Supermi", "Pop Mie"]
 NOODLE_FLAVORS = [
     "Goreng", "Ayam Bawang", "Soto", "Kari Ayam", "Rendang",
@@ -150,8 +123,6 @@ def augment_typo(text: str) -> str:
     if len(text) < 4:
         return text
     chars = list(text)
-    # Avoid corrupting digits -- a dropped/duplicated digit silently changes
-    # the product's quantity, which would mislabel the pair as "same product".
     candidates = [i for i in range(1, len(chars) - 1) if not chars[i].isdigit()]
     if not candidates:
         return text
@@ -175,9 +146,7 @@ def augment_shuffle(text: str) -> str:
     random.shuffle(words)
     return " ".join(words)
 
-
 _UNIT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*(gr|g|gram|ml|l|kg)\b", re.IGNORECASE)
-
 
 def augment_unit_format(text: str) -> str:
     def repl(m: re.Match) -> str:
@@ -188,9 +157,6 @@ def augment_unit_format(text: str) -> str:
         except ValueError:
             value = None
 
-        # Genuine cross-unit conversion (85gr <-> 0.085kg), not just spacing/
-        # casing variants of the same unit -- without this, the model is
-        # never shown this relationship as a positive pair during training.
         if value is not None and choice < 0.2:
             if unit in ("gr", "g", "gram"):
                 return f"{value / 1000:g}kg"
@@ -234,8 +200,6 @@ def generate_variant(text: str) -> str:
 
 
 def build_lexical_pairs(products: list[Product]) -> list[dict]:
-    """Category A positives (+ F/G hard negatives where a same-brand
-    sibling exists) -- distortion of the same product's own text."""
     by_brand: dict[str, list[Product]] = defaultdict(list)
     for p in products:
         by_brand[p.brand].append(p)
@@ -246,12 +210,6 @@ def build_lexical_pairs(products: list[Product]) -> list[dict]:
         variants = [v for v in variants if v.strip() and v != p.text] or [p.text]
 
         siblings = [s for s in by_brand[p.brand] if s.text != p.text]
-        # Prefer a same-size sibling: that isolates a flavor/variant-only
-        # difference, which is what the embedding model actually needs to
-        # learn (size mismatches are already caught deterministically by the
-        # matcher's quantity guard, regardless of embedding quality). Picking
-        # siblings fully at random almost always confounds flavor with size
-        # at once, diluting the one signal that matters.
         same_size_siblings = [s for s in siblings if s.size == p.size]
         preferred_siblings = same_size_siblings or siblings
 
@@ -266,10 +224,6 @@ def build_lexical_pairs(products: list[Product]) -> list[dict]:
 
 
 def build_brand_neighbor_negatives() -> list[tuple[str, str]]:
-    """Category H seed pairs: same generic product type and size, different
-    competing brand -- e.g. two different suppliers both listing "Beras
-    5kg". These never appear from build_lexical_pairs() above, since that
-    only ever pairs a product against its own same-brand siblings."""
     neighbor_pairs: list[tuple[str, str]] = []
 
     for base, brands, sizes in STAPLE_ITEMS + TOILETRY_ITEMS:
@@ -277,11 +231,6 @@ def build_brand_neighbor_negatives() -> list[tuple[str, str]]:
             for b1, b2 in zip(brands, brands[1:]):
                 neighbor_pairs.append((f"{base} {b1} {size}", f"{base} {b2} {size}"))
 
-    # Noodles: brand x flavor x size is sampled randomly per brand in
-    # build_catalog(), so exact (flavor, size) overlap across brands isn't
-    # guaranteed there. Generate H pairs directly against a fixed set of
-    # flavor/size combos instead, so brand-neighbor coverage doesn't depend
-    # on the catalog's random sampling.
     for flavor in ["Goreng", "Ayam Bawang", "Soto"]:
         for size in ["85gr", "90gr"]:
             for b1, b2 in zip(NOODLE_BRANDS, NOODLE_BRANDS[1:]):
@@ -291,10 +240,6 @@ def build_brand_neighbor_negatives() -> list[tuple[str, str]]:
 
 
 def build_brand_neighbor_triplets() -> list[dict]:
-    """Turn each H seed pair into a full (anchor, positive, hard_negative)
-    triplet: anchor is one product, positive is a lexical variant of it
-    (reusing the same augmenters as category A), hard_negative is its
-    brand-neighbor from a different supplier."""
     triplets = []
     for anchor_text, neighbor_text in build_brand_neighbor_negatives():
         for _ in range(2):
@@ -308,11 +253,6 @@ def build_brand_neighbor_triplets() -> list[dict]:
                 })
     return triplets
 
-
-# Category B: hand-written synonym / different-term pairs, same product.
-# Fuzzy string matching fails on most of these (little to no shared
-# substrings); a hard negative is attached to each so it trains under the
-# same TripletLoss objective as everything else (see training/train.py).
 B_SYNONYM_TRIPLETS = [
     ("Sabun Cair Lifebuoy 250ml", "Liquid Soap Lifebuoy 250ml", "Sabun Cair Dettol 250ml"),
     ("Minyak Goreng Bimoli 1L", "Cooking Oil Bimoli 1 Liter", "Minyak Goreng Tropical 1L"),
@@ -341,12 +281,6 @@ B_SYNONYM_TRIPLETS = [
     ("Deterjen Bubuk Attack 800gr", "Bubuk Cuci Attack 800gr", "Deterjen Bubuk Rinso 800gr"),
 ]
 
-# Category D: hand-written brand-name vs. generic-description pairs, same
-# product. The hardest category (needs world knowledge that a bare brand
-# name refers to a specific generic category), and the one the original
-# spec flagged as most prone to mislabeling -- kept deliberately
-# unambiguous (every generic side names the brand explicitly via "Merek X")
-# rather than trying to teach pure world-knowledge brand recall.
 D_BRAND_GENERIC_TRIPLETS = [
     ("Aqua 600ml", "Air Mineral Botol 600ml Merek Aqua", "Le Minerale 600ml"),
     ("Indomie Goreng 85gr", "Mie Instan Goreng Merek Indomie 85gr", "Mie Sedaap Goreng 85gr"),
@@ -375,13 +309,11 @@ D_BRAND_GENERIC_TRIPLETS = [
     ("Better Coklat 135gr", "Wafer Cokelat Merek Better Coklat 135gr", "Wafer Tango Coklat 130gr"),
 ]
 
-
 def build_handwritten_triplets(triples: list[tuple[str, str, str]], category: str) -> list[dict]:
     return [
         {"anchor": a, "positive": p, "negative": n, "category": category}
         for a, p, n in triples
     ]
-
 
 def main() -> None:
     products = build_catalog()
@@ -409,7 +341,6 @@ def main() -> None:
     for cat, n in sorted(by_category.items()):
         print(f"  {cat}: {n}")
     print(f"written to: {out_path}")
-
 
 if __name__ == "__main__":
     main()

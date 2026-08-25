@@ -1,21 +1,3 @@
-"""Fine-tune the product-name embedding model on the synthetic dataset from
-generate_dataset.py. Offline script, not part of the running app -- run it,
-then the checkpoint at model_weights/ is picked up automatically by
-backend/app/model.py on the next container start.
-
-After training, run evaluate.py against the checkpoint before trusting it --
-see the "Fine-tuning" section in the top-level README.md for why.
-
-Default mode retrains from the pretrained base model on the full dataset.
---from-checkpoint / --categories / --lr / --epochs support *continued*
-fine-tuning instead: start from an already-proven checkpoint and train
-further on just a subset of categories at a lower learning rate, so new
-data doesn't have to re-derive behavior the checkpoint already has right.
-This exists because a from-scratch retrain on the full dataset (base + all
-categories mixed in one pass) measurably regressed the abbreviation and
-flavor-separation behavior documented in README.md's Fine-tuning section --
-see .personal-storage/PADAN_dataset_finetuning_spec.md for the numbers.
-"""
 import argparse
 import json
 from pathlib import Path
@@ -31,13 +13,6 @@ BATCH_SIZE = 16
 EPOCHS = 3
 LEARNING_RATE = 1e-5
 TRIPLET_MARGIN = 0.3
-# TripletLoss-only + expanded/diverse catalog + gentle LR fixed generalization
-# (held-out canary passes) but flavor separation still under-fit -- root cause
-# turned out to be generate_dataset.py picking hard-negative siblings at
-# random, which almost always confounded a flavor difference with a size
-# difference at the same time (only ~16% of triplets isolated flavor alone).
-# Fixed there (prefer same-size siblings); margin=0.4 was tried as a
-# workaround before finding that root cause and didn't help, so back to 0.3.
 USE_MNRL = False
 
 
@@ -58,11 +33,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_examples(categories: set[str] | None) -> tuple[list[InputExample], list[InputExample]]:
-    # Every row feeds MNRL as a plain (anchor, positive) pair -- this is what
-    # teaches general "these are the same product" recognition. Rows that also
-    # have a hard negative additionally feed TripletLoss. Earlier attempt made
-    # these mutually exclusive (100% of rows had a negative, so MNRL got zero
-    # training) which caused real generalization loss on untrained categories.
     positive_examples = []
     triplet_examples = []
     with open(DATA_PATH, encoding="utf-8") as f:
@@ -94,10 +64,6 @@ def main() -> None:
         loader = DataLoader(positive_examples, shuffle=True, batch_size=BATCH_SIZE)
         train_objectives.append((loader, losses.MultipleNegativesRankingLoss(model)))
     if triplet_examples:
-        # TripletLoss enforces an absolute margin between anchor-positive and
-        # anchor-negative distance, directly targeting the failure MNRL missed:
-        # same-brand-different-flavor pairs need to be pushed apart, not just
-        # ranked below the positive within a batch.
         loader = DataLoader(triplet_examples, shuffle=True, batch_size=BATCH_SIZE)
         triplet_loss = losses.TripletLoss(
             model,

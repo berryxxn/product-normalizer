@@ -1,23 +1,9 @@
-"""Build the held-out evaluation set used by evaluate.py's per-category
-ablation table. Offline script, not part of the running app.
-
-Every product family here (sarden/canned-fish, susu kental manis/condensed
-milk) is deliberately absent from generate_dataset.py's catalog, so this set
-is disjoint from training -- it measures generalization, not memorization.
-Each pair is tagged with the same category taxonomy as training_pairs.jsonl
-(see generate_dataset.py's module docstring) so evaluate.py can report
-lexical vs. semantic performance broken down by category.
-"""
 import json
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent / "data"
 
-# (text_a, text_b, category) -- label (positive/negative) is derived from
-# category: A/B/D are same-product pairs, F/G/H are hard negatives.
 PAIRS: list[tuple[str, str, str]] = [
-    # --- Family 1: Sarden (canned fish) -- brands ABC, Botan; never in
-    # generate_dataset.py's catalog under this product type ---
     ("Sarden ABC Saus Tomat 155gr", "SARDEN ABC SAUS TOMAT 155 GR", "A_lexical"),
     ("Sarden ABC Extra Pedas 155gr", "Srden ABC Extra Pedas 155gr", "A_lexical"),
     ("Sarden ABC Saus Tomat 425gr", "Sarden ABC Saus Tomat 0.425kg", "A_lexical"),
@@ -48,8 +34,6 @@ PAIRS: list[tuple[str, str, str]] = [
     ("Sarden ABC Saus Tomat 425gr", "Sarden Botan Saus Tomat 425gr", "H_brand_neighbor"),
     ("Sarden ABC Balado 155gr", "Sarden Botan Balado 155gr", "H_brand_neighbor"),
 
-    # --- Family 2: Susu Kental Manis (condensed milk) -- brands Frisian
-    # Flag, Carnation; never in generate_dataset.py's catalog ---
     ("Susu Kental Manis Frisian Flag Coklat 370gr", "SUSU KENTAL MANIS FRISIAN FLAG COKLAT 370 GR", "A_lexical"),
     ("Susu Kental Manis Carnation Putih 385gr", "Susu Kntal Mnis Carnation Putih 385gr", "A_lexical"),
     ("Susu Kental Manis Frisian Flag Putih 370gr", "Susu Kental Manis Frisian Flag Putih 0.37kg", "A_lexical"),

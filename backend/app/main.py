@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.matcher import cluster_names
 from app.schemas import NormalizeRequest, NormalizeResponse
@@ -25,3 +26,6 @@ def normalize(payload: NormalizeRequest):
     clusters = cluster_names(payload.names)
     logger.info("POST /normalize: returning %d cluster(s)", len(clusters))
     return NormalizeResponse(clusters=clusters)
+
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")

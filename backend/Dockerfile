@@ -56,6 +56,7 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 ENV HF_HUB_OFFLINE=1
 
 COPY backend/app ./app
+COPY backend/static ./static
 COPY --from=builder /build/model_weights ./model_weights
 
 EXPOSE 8000

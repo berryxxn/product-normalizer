@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Normalisasi nama produk antar-supplier berbasis AI" />
+  <meta name="theme-color" content="#0f1419" />
+  <title>Normalisasi Nama Produk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="app-header">
+      <h1>Normalisasi Nama Produk</h1>
+      <p>Tempel daftar nama produk dari berbagai supplier, satu nama per baris.</p>
+    </header>
+
+    <section class="input-panel">
+      <label for="product-names">Daftar nama produk</label>
+      <textarea
+        id="product-names"
+        rows="12"
+        placeholder="Indomie Goreng 85gr&#10;Mie Goreng Indomi 85g&#10;INDOMIE GRNG 85 GR&#10;Sari Roti Tawar 400gr&#10;Roti Tawar Sari Roti 400g&#10;Teh Botol Sosro 400ml&#10;Teh Kotak Sosro 400 ml"
+      ></textarea>
+      <div class="input-footer">
+        <span class="input-hint">Tip: Tempel langsung dari Excel, WhatsApp, atau nota supplier</span>
+        <button id="submit-btn" type="button" class="submit-btn">
+          <span id="submit-spinner" class="spinner hidden" aria-hidden="true"></span>
+          <span id="submit-label">Cocokkan Produk</span>
+        </button>
+      </div>
+    </section>
+
+    <div id="error-state" class="state error-state hidden" role="alert">
+      <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+      <p id="error-message"></p>
+    </div>
+
+    <div id="loading-state" class="state loading-state hidden">
+      <span class="spinner" aria-hidden="true"></span>
+      <p>Memproses daftar produk...</p>
+    </div>
+
+    <section id="results-panel" class="state results-panel hidden" aria-label="Hasil normalisasi">
+      <div id="results-summary" class="results-summary"></div>
+      <div id="clusters-list" class="clusters-grid"></div>
+    </section>
+
+    <div id="empty-state" class="state empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+        <polyline points="10 9 9 9 8 9" />
+      </svg>
+      <p>Belum ada hasil. Masukkan daftar nama produk lalu klik "Cocokkan Produk".</p>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

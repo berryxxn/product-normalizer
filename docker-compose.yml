@@ -5,10 +5,3 @@ services:
       dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
-
-  frontend:
-    build: ./frontend-react
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend

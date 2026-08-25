@@ -14,7 +14,8 @@ with `AgglomerativeClustering`. See `CLAUDE.md` for the full design rationale.
 docker compose up --build
 ```
 
-Then open http://localhost:8000 in your browser.
+Then open http://localhost:3000 in your browser (the `frontend` service; it proxies `/normalize`
+and `/health` to the `backend` service on port 8000, which stays API-only).
 
 The first build downloads the embedding model, generates the synthetic training set, and
 fine-tunes the model as part of the image build (see "Fine-tuning" below) -- this takes real
@@ -23,15 +24,28 @@ runtime dependency on internet access.
 
 ## Run locally without Docker
 
+Backend:
+
 ```
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Then open http://localhost:8000. Without Docker, `model_weights/` won't exist unless you run
-the fine-tuning pipeline yourself first (see below), so this uses the pretrained base model and
-downloads it from Hugging Face on first request.
+Without Docker, `model_weights/` won't exist unless you run the fine-tuning pipeline yourself
+first (see below), so this uses the pretrained base model and downloads it from Hugging Face on
+first request.
+
+Frontend (in a separate terminal):
+
+```
+cd frontend-react
+npm install
+npm run dev
+```
+
+Then open the URL Vite prints (default http://localhost:5173) -- its dev-server proxy forwards
+`/normalize` and `/health` to `localhost:8000`, so the backend must be running first.
 
 ## Fine-tuning
 

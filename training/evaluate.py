@@ -1,7 +1,7 @@
 """Evaluate a fine-tuned checkpoint before trusting it. Offline script, not
 part of the running app.
 
-Checks four things, comparing the candidate checkpoint against the pretrained
+Checks five things, comparing the candidate checkpoint against the pretrained
 baseline:
   1. Raw semantic similarity on known hard cases (diagnostic, not pass/fail
      on its own -- the hybrid matcher's lexical weighting can compensate for
@@ -13,17 +13,28 @@ baseline:
      the canary for catastrophic forgetting on categories the model wasn't
      trained on.
   4. Verdict: only PASS if both clustering checks (2 and 3) are fully correct.
+  5. A per-category evidence table against data/eval_set.jsonl (disjoint
+     product families, tagged A/B/D/F/G/H) -- lexical (rapidfuzz) vs.
+     pretrained-semantic vs. fine-tuned-semantic, averaged per category.
+     Diagnostic, not part of the ship/no-ship verdict: this is the evidence
+     that feeds the "AI is needed, not forced" argument in
+     .personal-storage/PADAN_dataset_finetuning_spec.md, not a pass/fail gate.
 
 Usage: python training/evaluate.py [path-to-checkpoint]
 Defaults to model_weights/ if no path given.
 """
+import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+from rapidfuzz import fuzz
 from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
+
+EVAL_SET_PATH = Path(__file__).parent / "data" / "eval_set.jsonl"
 
 PRETRAINED = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_CHECKPOINT = Path(__file__).parent.parent / "model_weights"
@@ -108,6 +119,38 @@ def check_clusters(expected_clusters: list[list[str]], label: str) -> bool:
     return ok
 
 
+def report_eval_set(pretrained: SentenceTransformer, candidate: SentenceTransformer) -> None:
+    if not EVAL_SET_PATH.exists():
+        print(f"--- eval set not found at {EVAL_SET_PATH}, skipping category table ---\n")
+        return
+
+    with open(EVAL_SET_PATH, encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f]
+
+    by_category: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        by_category[row["category"]].append(row)
+
+    print(f"--- per-category evidence table (eval_set.jsonl, {len(rows)} pairs, held out from training) ---")
+    header = f"{'category':<20} {'label':<9} {'n':>3}  {'lexical':>8} {'pretrained':>11} {'fine-tuned':>11}"
+    print(header)
+    for category in sorted(by_category):
+        pairs = by_category[category]
+        label = pairs[0]["label"]
+        lexical_scores, pretrained_scores, candidate_scores = [], [], []
+        for row in pairs:
+            a, b = row["text_a"], row["text_b"]
+            lexical_scores.append(fuzz.token_set_ratio(a, b) / 100.0)
+            pretrained_scores.append(cosine(pretrained, a, b))
+            candidate_scores.append(cosine(candidate, a, b))
+        print(
+            f"{category:<20} {label:<9} {len(pairs):>3}  "
+            f"{np.mean(lexical_scores):>8.3f} {np.mean(pretrained_scores):>11.3f} "
+            f"{np.mean(candidate_scores):>11.3f}"
+        )
+    print("(label=positive wants HIGH scores, label=negative wants LOW scores)\n")
+
+
 def main() -> None:
     checkpoint = sys.argv[1] if len(sys.argv) > 1 else str(DEFAULT_CHECKPOINT)
 
@@ -115,6 +158,7 @@ def main() -> None:
     candidate = SentenceTransformer(checkpoint, device="cpu")
 
     check_semantic_pairs(pretrained, candidate)
+    report_eval_set(pretrained, candidate)
 
     import os
     os.environ["MODEL_PATH"] = checkpoint

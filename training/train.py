@@ -5,7 +5,18 @@ backend/app/model.py on the next container start.
 
 After training, run evaluate.py against the checkpoint before trusting it --
 see the "Fine-tuning" section in the top-level README.md for why.
+
+Default mode retrains from the pretrained base model on the full dataset.
+--from-checkpoint / --categories / --lr / --epochs support *continued*
+fine-tuning instead: start from an already-proven checkpoint and train
+further on just a subset of categories at a lower learning rate, so new
+data doesn't have to re-derive behavior the checkpoint already has right.
+This exists because a from-scratch retrain on the full dataset (base + all
+categories mixed in one pass) measurably regressed the abbreviation and
+flavor-separation behavior documented in README.md's Fine-tuning section --
+see .personal-storage/PADAN_dataset_finetuning_spec.md for the numbers.
 """
+import argparse
 import json
 from pathlib import Path
 
@@ -13,7 +24,7 @@ from sentence_transformers import InputExample, SentenceTransformer, losses
 from torch.utils.data import DataLoader
 
 BASE_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-DATA_PATH = Path(__file__).parent / "data" / "train_pairs.jsonl"
+DATA_PATH = Path(__file__).parent / "data" / "training_pairs.jsonl"
 OUTPUT_PATH = Path(__file__).parent.parent / "model_weights"
 
 BATCH_SIZE = 16
@@ -30,7 +41,23 @@ TRIPLET_MARGIN = 0.3
 USE_MNRL = False
 
 
-def load_examples() -> tuple[list[InputExample], list[InputExample]]:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--from-checkpoint", default=None,
+        help="Path to an existing checkpoint to continue training from (default: pretrained base model).",
+    )
+    parser.add_argument(
+        "--categories", default=None,
+        help="Comma-separated category tags to train on (default: all rows in training_pairs.jsonl).",
+    )
+    parser.add_argument("--lr", type=float, default=LEARNING_RATE)
+    parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--margin", type=float, default=TRIPLET_MARGIN)
+    return parser.parse_args()
+
+
+def load_examples(categories: set[str] | None) -> tuple[list[InputExample], list[InputExample]]:
     # Every row feeds MNRL as a plain (anchor, positive) pair -- this is what
     # teaches general "these are the same product" recognition. Rows that also
     # have a hard negative additionally feed TripletLoss. Earlier attempt made
@@ -41,6 +68,8 @@ def load_examples() -> tuple[list[InputExample], list[InputExample]]:
     with open(DATA_PATH, encoding="utf-8") as f:
         for line in f:
             row = json.loads(line)
+            if categories is not None and row.get("category") not in categories:
+                continue
             positive_examples.append(InputExample(texts=[row["anchor"], row["positive"]]))
             if row.get("negative"):
                 triplet_examples.append(
@@ -50,10 +79,15 @@ def load_examples() -> tuple[list[InputExample], list[InputExample]]:
 
 
 def main() -> None:
-    positive_examples, triplet_examples = load_examples()
+    args = parse_args()
+    categories = set(args.categories.split(",")) if args.categories else None
+
+    positive_examples, triplet_examples = load_examples(categories)
     print(f"positive pairs: {len(positive_examples)}, triplets w/ hard negative: {len(triplet_examples)}")
 
-    model = SentenceTransformer(BASE_MODEL, device="cpu")
+    model_source = args.from_checkpoint or BASE_MODEL
+    print(f"starting from: {model_source}")
+    model = SentenceTransformer(model_source, device="cpu")
 
     train_objectives = []
     if USE_MNRL and positive_examples:
@@ -68,19 +102,19 @@ def main() -> None:
         triplet_loss = losses.TripletLoss(
             model,
             distance_metric=losses.TripletDistanceMetric.COSINE,
-            triplet_margin=TRIPLET_MARGIN,
+            triplet_margin=args.margin,
         )
         train_objectives.append((loader, triplet_loss))
 
     total_examples = len(positive_examples) + len(triplet_examples)
     steps_per_epoch = max(1, total_examples // BATCH_SIZE)
-    warmup_steps = int(0.1 * steps_per_epoch * EPOCHS)
+    warmup_steps = int(0.1 * steps_per_epoch * args.epochs)
 
     model.fit(
         train_objectives=train_objectives,
-        epochs=EPOCHS,
+        epochs=args.epochs,
         warmup_steps=warmup_steps,
-        optimizer_params={"lr": LEARNING_RATE},
+        optimizer_params={"lr": args.lr},
         show_progress_bar=True,
     )
 
